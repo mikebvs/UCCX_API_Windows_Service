@@ -121,7 +121,7 @@ namespace UCCX_API_Service
         //    eventLog1.WriteEntry("Beginning Agent Queue Update.", EventLogEntryType.Information, eventId++);
         //    apiHandler.ExcelQueueUpdate(excelData, ref eventId);
         //}
-        protected void Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        public void Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             // Refresh APIHandler Configuration Information
             apiHandler.Refresh(ref eventId);
