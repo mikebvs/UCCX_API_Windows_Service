@@ -69,7 +69,7 @@ namespace UCCX_API_Service
 
             // Create Timer Object on Init
             _timer = new System.Timers.Timer();
-            _scheduleTime = DateTime.Now.AddMinutes(15);
+            _scheduleTime = DateTime.Now.AddMinutes(2);
         }
 
         protected override void OnStart(string[] args)

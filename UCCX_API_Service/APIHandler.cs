@@ -49,123 +49,186 @@ namespace UCCX_API_Service
         }
         public void ExcelQueueUpdate(ExcelData excelData, ref int eventId)
         {
-            //eventNum = eventId;
-            //UpdateConsoleStep("Updating Agent Queues via UCCX API...");
+            cm.BeginLog();
+            cm.LogMessage("Beginning WFM Agent Queue Update Process using the UCCX API.");
+            cm.LogMessage("");
+            
+            int numFailed = 0;
             int numAgentsProcessed = 0;
-            Console.SetCursorPosition(Console.CursorLeft, Console.CursorTop + 1);
-            //UpdateConsoleStep("\t>Agents Processed: " + numAgentsProcessed.ToString() + "/" + excelData.excelAgents.Count.ToString());
             foreach (ExcelAgent excelAgent in excelData.excelAgents)
             {
-                cm.BeginLog();
                 // Determine Agent URL via apiData.ResourcesData
                 string agentUserId = apiData.ResourcesData.Resource.Where(p => p.FirstName + " " + p.LastName == excelAgent.agentName).First().UserID;
                 string agentUrl = $"{cm.RootURL}/resource/{agentUserId}";
-                //// DEBUG -- Prints the built Agent URL for verification ###############################################
-                //Console.WriteLine(agentUrl);
-                ////#####################################################################################################
-
 
                 // Request Agent API Info to modify for updated skillMap
-                eventLog.WriteEntry("Sending GET Request for Agent Resource Data (" + agentUserId + ").", EventLogEntryType.Information, ++eventId);
-                WebRequest apiRequest = WebRequest.Create(agentUrl);
-                string encoded = System.Convert.ToBase64String(System.Text.Encoding.GetEncoding("ISO-8859-1").GetBytes(cm.Username + ":" + cm.Password));
-                apiRequest.Headers.Add("Authorization", "Basic " + encoded);
-                HttpWebResponse apiResponse = (HttpWebResponse)apiRequest.GetResponse();
-                string xmlOutput;
-                if (apiResponse.StatusCode == HttpStatusCode.OK)
+                if(cm.Env == "DEV")
                 {
-                    using (StreamReader sr = new StreamReader(apiResponse.GetResponseStream()))
-                        xmlOutput = sr.ReadToEnd();
-                    XmlDocument xml = new XmlDocument();
-                    xml.LoadXml(xmlOutput);
+                    eventLog.WriteEntry("Sending GET Request for Agent Resource Data (" + agentUserId + ").\nAPI Endpoint: " + agentUrl, EventLogEntryType.Information, ++eventId);
+                }
+                else
+                {
+                    eventLog.WriteEntry("Sending GET Request for Agent Resource Data (" + agentUserId + ").", EventLogEntryType.Information, ++eventId);
+                }
+
+                try
+                { 
+                    // Determine which Resource from APIData.ResourcesData corresponds to the current excelAgent being processed
+                    Resource agentInfo = apiData.ResourcesData.Resource.Where(p => p.FirstName + " " + p.LastName == excelAgent.agentName).First();
+                    // Serialize XML related to the current excelAgent being processed using Resource Object
+                    XmlDocument xml = SerializeXml(agentInfo);
+
                     // Isolate Old skillMap Node
                     XmlNode node = xml.SelectSingleNode("/resource/skillMap");
 
                     // Determine Agent's desired Queue
                     ExcelSkill newQueue = excelData.excelSkills.Where(p => p.Name == excelAgent.Queue).First();
+                    
                     // Build Skill Map XML to replace current using Agent's desired Queue
                     XmlDocument xmlSkillMap = new XmlDocument();
-                    xmlSkillMap.LoadXml(BuildSkillMap(newQueue));
+                    string skillMapString = BuildSkillMap(newQueue);
 
-                    // Create new XmlNode object to replace old skillMap with
-                    XmlNode newNode = xmlSkillMap.SelectSingleNode("/skillMap");
-                    //// DEBUG -- Prints the updated Skill Map XML ##########################################################
-                    //Console.WriteLine("########################### NEW SKILL MAP ###########################\n" + node.OuterXml + "\n\n");
-                    ////#####################################################################################################
-
-                    // Replace skillMap Node with new skillMap Node
-                    node.InnerXml = newNode.InnerXml;
-                    //// DEBUG -- Removes all skillMap InnerXml Nodes, comment in to reset user skillMaps for testing #######
-                    //node.InnerXml = "";
-                    ////#####################################################################################################
-                    
-                    
-                    try
+                    // Determine Action based on whether or not error occurred in BuildSkillMap()
+                    if(skillMapString != "ERROR")
                     {
-                        // Call Method to make PUT Request to API to update Agent skillMap
-                        cm.LogMessage($"Attempting to update {excelAgent.agentName} ({agentUserId}) to new Queue: {excelAgent.Queue}\n\tAgent refURL: {agentUrl}");
-                        HttpWebResponse requestResponse = UpdateAgentResource(xml.OuterXml, agentUrl);
-                        cm.LogMessage($"Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}\n");
-                        //// DEBUG -- Prints HttpWebResponse from PUT Request ###################################################
-                        //Console.WriteLine($"{requestResponse.StatusCode}: {requestResponse.StatusDescription}");
-                        ////#####################################################################################################                    
+                        xmlSkillMap.LoadXml(skillMapString);
+
+                        // Create new XmlNode object to replace old skillMap with
+                        XmlNode newNode = xmlSkillMap.SelectSingleNode("/skillMap");
+
+                        // Replace skillMap Node with new skillMap Node
+                        node.InnerXml = newNode.InnerXml;
+                
+                        // Make PUT Request to update Agent Skill Map
+                        try
+                        {
+                            // Call Method to make PUT Request to API to update Agent skillMap
+                            cm.LogMessage($"Attempting to update {excelAgent.agentName} ({agentUserId}) to new Queue: {excelAgent.Queue}\n\tAgent refURL: {agentUrl}");
+                            eventNum = eventId;
+                            HttpWebResponse requestResponse = UpdateAgentResource(xml.OuterXml, agentUrl);
+                            eventId++;
+                            if(requestResponse.StatusCode != HttpStatusCode.OK)
+                            {
+                                //eventLog.WriteEntry($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
+                                //cm.LogMessage($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
+                                throw new System.ArgumentException($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
+                            }
+                            else
+                            {
+                                if(requestResponse.StatusCode == HttpStatusCode.Unauthorized ||
+                                   requestResponse.StatusCode == HttpStatusCode.BadRequest ||
+                                   requestResponse.StatusCode == HttpStatusCode.Forbidden ||
+                                   requestResponse.StatusCode == HttpStatusCode.NotFound)
+                                {
+                                    cm.LogMessage($"Fatal Error -- Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
+                                    cm.LogMessage($"Please contact support to identify the issue.");
+                                    cm.LogMessage($"The Process will not proceed.");
+                                    break;
+                                }
+                                else
+                                {
+                                    cm.LogMessage($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            numFailed += 1;
+                            eventLog.WriteEntry("Invalid HttpWebResponse.StatusCode while attempting to UPDATE Agent Resource Data (" + agentUserId + ").\n" + e.Message.ToString(), EventLogEntryType.Warning, ++eventId);
+                            cm.LogMessage("-->Invalid HttpWebResponse.StatusCode while attempting to UPDATE Agent Resource Data (" + agentUserId + ")");
+                            cm.LogMessage("e.Message.ToString()");
+                        }
                     }
-                    catch (Exception e)
+                    else
                     {
-                        eventLog.WriteEntry("Invalid HttpWebResponse.StatusCode while attempting to UPDATE Agent Resource Data (" + agentUserId + ").\n" + e.Message.ToString(), EventLogEntryType.Warning, ++eventId);
-                        cm.LogMessage("-->Invalid HttpWebResponse.StatusCode while attempting to UPDATE Agent Resource Data (" + agentUserId + ")");
-                        cm.LogMessage("ERROR DESCRIPTIONS: " + e.Message.ToString());
-                        // HANDLE ERROR/BAD RESPONSE
+                        numFailed += 1;
                     }
                     numAgentsProcessed += 1;
-                    //Console.SetCursorPosition(Console.CursorLeft, Console.CursorTop - 1);
-                    //UpdateConsoleStep("\t>Agents Processed: " + numAgentsProcessed.ToString() + "/" + excelData.excelAgents.Count.ToString());
                 }
-                else
+                catch (Exception e)
                 {
-                    eventLog.WriteEntry("Invalid HttpWebResponse.StatusCode while attempting to RETRIEVE Agent Resource Data (" + agentUserId + ").\n" + apiResponse.StatusCode.ToString() + ": " + apiResponse.StatusDescription, EventLogEntryType.Warning, ++eventId);
-                    cm.LogMessage("-->Invalid HttpWebResponse.StatusCode while attempting to RETRIEVE Agent Resource Data (" + agentUserId + ")");
-                    cm.LogMessage("ERROR DESCRIPTIONS: " + apiResponse.StatusCode.ToString() + ": " + apiResponse.StatusDescription);
+                    eventLog.WriteEntry($"Error Occurred while updating current user {agentUserId}.\nAgent URL Endpoint Used: {agentUrl}\nError Caught: {e.Message.ToString()}\nError Source: {e.Source.ToString()}\nError Stack Trace: {e.StackTrace.ToString()}", EventLogEntryType.Error, eventId++);
+                    cm.LogMessage($"Error Occurred -- {e.Message.ToString()}");
+                    cm.LogMessage($"Stack Trace: {e.StackTrace.ToString()}");
+                    cm.LogMessage($"Continuing to the next agent...");
                 }
-                cm.EndLog();
+                cm.LogMessage("");
             }
-            //eventId = eventNum;
-            //UpdateConsoleStep("");
-            //Console.SetCursorPosition(Console.CursorLeft, Console.CursorTop - 1);
-            //currentLineCursor = Console.CursorTop;
-            //Console.Write(new string(' ', Console.WindowWidth));
-            //Console.SetCursorPosition(0, Console.CursorTop);
-            //UpdateConsoleStep("Process Finished...");
-            //Console.SetCursorPosition(Console.CursorLeft, Console.CursorTop + 1);
-            //UpdateConsoleStep("\t>Updated " + excelData.excelAgents.Count.ToString() + " Agent Queues.\n\n");
+            cm.EndLog();
+            cm.BeginLog();
+            EndProcessLog(excelData.excelAgents.Count, numFailed);
+            cm.EndLog();
+            eventLog.WriteEntry("UCCX API Agent Queue Update has finished.", EventLogEntryType.Information, eventId++);
         }
+        public XmlDocument SerializeXml<T>(T serializeObject, bool stripNamespace = true)
+        {
+            string xmlString = "";
 
+            // Create our own namespaces for the output
+            System.Xml.Serialization.XmlSerializerNamespaces namespaces = new System.Xml.Serialization.XmlSerializerNamespaces();
+
+            //Add an empty namespace and empty value
+            namespaces.Add("", "");
+
+            //System.Xml.Serialization.XmlSerializer x = new System.Xml.Serialization.XmlSerializer(serializeObject.GetType());
+            using (StringWriter textWriter = new StringWriter())
+            {
+                using (XmlWriter writer = XmlWriter.Create(textWriter, new XmlWriterSettings { OmitXmlDeclaration = true }))
+                {
+                    if (stripNamespace == true)
+                    {
+                        new System.Xml.Serialization.XmlSerializer(serializeObject.GetType()).Serialize(writer, serializeObject, namespaces);
+                    }
+                    else
+                    {
+                        new System.Xml.Serialization.XmlSerializer(serializeObject.GetType()).Serialize(writer, serializeObject);
+                    }
+                }
+                xmlString = textWriter.ToString();
+            }
+
+            XmlDocument xml = new XmlDocument();
+            xml.LoadXml(xmlString);
+            return xml;
+        }
         // Gets all skills associated with the input agent's Queue
         private string BuildSkillMap(ExcelSkill newQueue)
         {
             // Template skillMap XML --> Uses Replace in order to build new skillMap string
             string templateSkill = "<skillCompetency><competencelevel>COMPETENCY_LEVEL</competencelevel><skillNameUriPair name=\"SKILL_NAME\"><refURL>REF_URL</refURL></skillNameUriPair></skillCompetency>";
-            //// DEBUG -- Prints the Queue Name and all associated Skills/Competency Levels #########################
-            //Console.WriteLine(newQueue.Name);
-            //foreach(KeyValuePair<string, int> kvp in newQueue.SkillsAdded)
-            //{
-            //    //Console.WriteLine("   >Adding " + kvp.Key + ": " + kvp.Value);
-            //    //Console.WriteLine(templateSkill.Replace("COMPETENCY_LEVEL", kvp.Value.ToString()).Replace("SKILL_NAME", kvp.Key).Replace("REF_URL",addSkill.Self) + "\n\n");
-            //}
-            ////#####################################################################################################
             string skillMap = "";
+            string skillsReport = "";
+            bool allSkillsFound = true;
             foreach (KeyValuePair<string, int> kvp in newQueue.SkillsAdded)
             {
-                // Determine Skill refUrl by querying APIData
-                Skill addSkill = apiData.SkillsData.Skill.Where(p => p.SkillName == kvp.Key).First();
+                try
+                {
+                    // Determine Skill refUrl by querying APIData
+                    Skill addSkill = apiData.SkillsData.Skill.Where(p => p.SkillName.ToUpper() == kvp.Key.ToUpper()).First();
+                    //Append skillMap string with new info
+                    skillMap += templateSkill.Replace("COMPETENCY_LEVEL", kvp.Value.ToString()).Replace("SKILL_NAME", addSkill.SkillName).Replace("REF_URL", addSkill.Self);
 
-                //Append skillMap string with new info
-                skillMap += templateSkill.Replace("COMPETENCY_LEVEL", kvp.Value.ToString()).Replace("SKILL_NAME", kvp.Key).Replace("REF_URL", addSkill.Self);
+                    skillsReport += $"{kvp.Key}({kvp.Value.ToString()}), ";
+                }
+                catch
+                {
+                    // Log and output to console Error
+                    cm.LogMessage($"The skill {kvp.Key} was unable to be found within the API Skills. Please check the spelling and formatting of the skill name. The skill name formatting is extremely strict.");
+                    allSkillsFound = false;
+                    break;
+                }
             }
-            // Add XML Outer Node onto new skillMap contents prior to replacing old skillMap XML Node
-            skillMap = $"<skillMap>{skillMap}</skillMap>";
+            if(allSkillsFound == true)
+            {
+                // Add XML Outer Node onto new skillMap contents prior to replacing old skillMap XML Node
+                skillMap = $"<skillMap>{skillMap}</skillMap>";
 
-            return skillMap;
+                return skillMap;
+            }
+            else
+            {
+                return "ERROR";
+            }
         }
         private HttpWebResponse UpdateAgentResource(string requestXml, string agentUrl)
         {
@@ -212,6 +275,20 @@ namespace UCCX_API_Service
             Console.Write(new string(' ', Console.WindowWidth));
             Console.SetCursorPosition(0, currentLineCursor);
             Console.Write(message);
+        }
+        public void EndProcessLog(int totalAgents, int numFailed)
+        {
+            cm.LogMessage($"Finished WFM Agent Queue Update Process using the UCCX API.");
+            if (numFailed > 0)
+            {
+                cm.LogMessage($">Attempted to update {totalAgents.ToString()} Agents.");
+                cm.LogMessage($">WARNING: {numFailed.ToString()}/{totalAgents.ToString()} Agents failed to update.");
+                cm.LogMessage($">{(totalAgents - numFailed).ToString()}/{totalAgents.ToString()} Agents successfully updated.");
+            }
+            else
+            {
+                cm.LogMessage($">{totalAgents.ToString()} Agents successfully updated.");
+            }
         }
     }
 }

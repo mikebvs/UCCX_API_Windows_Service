@@ -163,6 +163,7 @@ namespace UCCX_API_Service
             using (StreamWriter w = File.AppendText(LogPath))
             {
                 w.WriteLine("----------------------------------------------------------------------------------------------");
+                w.WriteLine("");
             }
         }
         public new void Info()
@@ -176,7 +177,7 @@ namespace UCCX_API_Service
             Password = appSettings["UCCX_Password"] ?? "Not Found";
             RootURL = appSettings["UCCX_URL_" + Env.ToUpper()] ?? "Not Found";
             LogPath = appSettings["Logging_" + Env.ToUpper()] ?? "Not Found";
-            LogPath = LogPath + "WFM_UpdateQueue_" + System.DateTime.Now.ToString("MMddyyyy_hh-mm-ss") + ".txt";
+            LogPath = LogPath + "WFM UCCX API [WindowsService] - " + System.DateTime.Now.ToString("MMddyyyy_HH00") + ".txt";
             ExcelFile = appSettings["ExcelFile_" + Env.ToUpper()] ?? "Not Found";
         }
         //public void UpdateConsoleStep(string message)
