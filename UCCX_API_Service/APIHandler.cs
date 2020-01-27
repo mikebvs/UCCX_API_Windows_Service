@@ -47,7 +47,7 @@ namespace UCCX_API_Service
         {
             eventLog = eLog;
         }
-        public void ExcelQueueUpdate(ExcelData excelData, ref int eventId)
+        public void ExcelQueueUpdate(ExcelData excelData, ref int eventId, bool wipeData = false)
         {
             cm.BeginLog();
             cm.LogMessage("Beginning WFM Agent Queue Update Process using the UCCX API.");
@@ -57,19 +57,11 @@ namespace UCCX_API_Service
             int numAgentsProcessed = 0;
             foreach (ExcelAgent excelAgent in excelData.excelAgents)
             {
+                Stopwatch sw = new Stopwatch();
+                sw.Start();
                 // Determine Agent URL via apiData.ResourcesData
                 string agentUserId = apiData.ResourcesData.Resource.Where(p => p.FirstName + " " + p.LastName == excelAgent.agentName).First().UserID;
                 string agentUrl = $"{cm.RootURL}/resource/{agentUserId}";
-
-                // Request Agent API Info to modify for updated skillMap
-                if(cm.Env == "DEV")
-                {
-                    eventLog.WriteEntry("Sending GET Request for Agent Resource Data (" + agentUserId + ").\nAPI Endpoint: " + agentUrl, EventLogEntryType.Information, ++eventId);
-                }
-                else
-                {
-                    eventLog.WriteEntry("Sending GET Request for Agent Resource Data (" + agentUserId + ").", EventLogEntryType.Information, ++eventId);
-                }
 
                 try
                 { 
@@ -96,9 +88,18 @@ namespace UCCX_API_Service
                         // Create new XmlNode object to replace old skillMap with
                         XmlNode newNode = xmlSkillMap.SelectSingleNode("/skillMap");
 
-                        // Replace skillMap Node with new skillMap Node
-                        node.InnerXml = newNode.InnerXml;
-                
+                        // If wipeData == True, remove all skills from Agents
+                        if (wipeData == false)
+                        {
+                            // Replace skillMap Node with new skillMap Node
+                            node.InnerXml = newNode.InnerXml;
+                        }
+                        else
+                        {
+                            // Remove all skills from Agents
+                            node.InnerXml = "";
+                        }
+
                         // Make PUT Request to update Agent Skill Map
                         try
                         {
@@ -107,28 +108,15 @@ namespace UCCX_API_Service
                             eventNum = eventId;
                             HttpWebResponse requestResponse = UpdateAgentResource(xml.OuterXml, agentUrl);
                             eventId++;
-                            if(requestResponse.StatusCode != HttpStatusCode.OK)
+                            sw.Stop();
+                            if(requestResponse.StatusCode == HttpStatusCode.OK)
                             {
-                                //eventLog.WriteEntry($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
-                                //cm.LogMessage($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
-                                throw new System.ArgumentException($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
+                                eventLog.WriteEntry($"Successfully updated the Agent data with Response Code: {requestResponse.StatusCode}\nDuration: ({sw.ElapsedMilliseconds}ms)");
+                                cm.LogMessage($"Successfully updated the Agent data with Response Code: {requestResponse.StatusCode}\nDuration: ({sw.ElapsedMilliseconds}ms)");
                             }
                             else
                             {
-                                if(requestResponse.StatusCode == HttpStatusCode.Unauthorized ||
-                                   requestResponse.StatusCode == HttpStatusCode.BadRequest ||
-                                   requestResponse.StatusCode == HttpStatusCode.Forbidden ||
-                                   requestResponse.StatusCode == HttpStatusCode.NotFound)
-                                {
-                                    cm.LogMessage($"Fatal Error -- Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
-                                    cm.LogMessage($"Please contact support to identify the issue.");
-                                    cm.LogMessage($"The Process will not proceed.");
-                                    break;
-                                }
-                                else
-                                {
-                                    cm.LogMessage($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
-                                }
+                                throw new System.ArgumentException($"Error - Status Code Returned: {requestResponse.StatusCode} -- {requestResponse.StatusDescription}");
                             }
                         }
                         catch (Exception e)
@@ -136,7 +124,7 @@ namespace UCCX_API_Service
                             numFailed += 1;
                             eventLog.WriteEntry("Invalid HttpWebResponse.StatusCode while attempting to UPDATE Agent Resource Data (" + agentUserId + ").\n" + e.Message.ToString(), EventLogEntryType.Warning, ++eventId);
                             cm.LogMessage("-->Invalid HttpWebResponse.StatusCode while attempting to UPDATE Agent Resource Data (" + agentUserId + ")");
-                            cm.LogMessage("e.Message.ToString()");
+                            cm.LogMessage(e.Message.ToString());
                         }
                     }
                     else
